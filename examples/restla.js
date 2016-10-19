@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 var util = require('util');
 var teslams = require('../teslams.js');
+var JSONbig = require('json-bigint');
 var argv = require('optimist')
-    .usage('Usage: $0 -u <username> -p <password> -XZ -P [port]')
+    .usage('Usage: $0 -u <username> -p <password> -XZ -P [port] -O [offset]')
     .alias('u', 'username')
     .describe('u', 'Teslamotors.com login')
     .alias('p', 'password')
@@ -10,6 +11,9 @@ var argv = require('optimist')
     .describe('P', 'HTTP Listen Port (default is 8888)')
     .alias('P', 'port')
     .default('P', '8888')
+    .alias('O', 'vehicle')   
+    .describe('O', 'Select the vehicle offset for accounts with multiple vehicles')
+    .default('O', 0)
     .boolean(['X', 'Z'])
     .alias('X', 'isplugged')
     .describe('X', 'Check if car is plugged in and continue only if connected to a charger')
@@ -28,7 +32,8 @@ if (argv.help === true) {
     console.log('\nOptions:');
     console.log('  -u, --username  Teslamotors.com login                   ');
     console.log('  -p, --password  Teslamotors.com password                ');
-    console.log('  -P, --port      HTTP listen port                        [default:8888]');
+    console.log('  -P, --port      HTTP listen port                               [default:8888]');
+    console.log('  -O, --vehicle   Vehicle offset for multi-vehicle accounts      [default: 0]  ');
     console.log('  -X, --isplugged Check if car is plugged in and continue only if connected to a charger      [boolean]');
     console.log('  -Z, --isawake   Check if car is asleep and continue only if awake                           [boolean]');
     console.log('  -?, --help      Print usage information                 ');
@@ -52,20 +57,19 @@ function parseUrl(vehicle, req, res) {
         res.setHeader("Pragma", "no-cache");
         res.setHeader("Expires", 0);
         res.writeHead(200, {'Content-Type': 'application/json'});
-        res.end(JSON.stringify(stuff));
+        res.end(JSONbig.stringify(stuff));
     }
 
     var vid = vehicle.id, url = req.url;
-    console.log('url: ' + url + '\n');
 
     switch (url) {
-    case "/vehicle":
-        teslams.vehicles(vid, function (resp) {
+    case "/vehicles":
+        teslams.all({ email: creds.username, password: creds.password }, function (error, response, body) {
             res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
             res.setHeader("Pragma", "no-cache");
             res.setHeader("Expires", 0);
             res.writeHead(200, {'Content-Type': 'application/json'});
-            res.end(JSON.stringify(resp));
+            res.end(body);
         });
         break;
     case "/mobile":
@@ -191,13 +195,13 @@ function parseUrl(vehicle, req, res) {
     case "/range/max":
         teslams.charge_range({ id: vid, range: 'max' }, pr);
         break;
-    case "/help":
+    default:
         res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         res.setHeader("Pragma", "no-cache");
         res.setHeader("Expires", 0);
         res.writeHead(200, {'Content-Type': 'text/html'});
         res.write('<html><body><table>');
-        res.write('<tr><td><a href="../vehicle">/vehicle</a><td>Print vehicle info</tr>');
+        res.write('<tr><td><a href="../vehicles">/vehicles</a><td>Print vehicle info</tr>');
         res.write('<tr><td><a href="../vehicle_state">/vehicle_state</a><td>Display the vehicle state</tr>');
         res.write('<tr><td><a href="../charge">/charge</a><td>Display the charge state</tr>');
         res.write('<tr><td><a href="../charge/start">/charge/start</a><td>Start charging the car</tr>');
@@ -232,12 +236,6 @@ function parseUrl(vehicle, req, res) {
         res.write('<tr><td><a href="../help">/help</a><td>Print this usage information</tr>');
         res.end('</table></body></html>');
         break;
-    default:
-        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        res.setHeader("Pragma", "no-cache");
-        res.setHeader("Expires", 0);
-        res.writeHead(501, {'Content-Type': 'text/plain'});
-        res.end("Invalid URL\n");
     }
 }
 
@@ -253,20 +251,22 @@ teslams.all({ email: creds.username, password: creds.password }, function (error
     var data, vehicle;
     //check we got a valid JSON response from Tesla
     try {
-        data = JSON.parse(body);
+        data = JSONbig.parse(body);
     } catch (err) {
-        pr(new Error('login failed'));
+        pr(new Error('parsing error: ' + err ));
         process.exit(1);
     }
     //check we got an array of vehicles and get the first one
-    if (!util.isArray(data)) {
+    if (!util.isArray(data.response)) {
+        console.log( data.response );
         pr(new Error('expecting an array from Tesla Motors cloud service'));
         process.exit(1);
     }
-    vehicle = data[0];
+    //vehicle = data.response[argv.vehicle];
+    vehicle = data.response[0];
     //check the vehicle has a valid id
-    if (vehicle.id === undefined) {
-        pr(new Error('expecting vehicle ID from Tesla Motors cloud service'));
+    if (vehicle.id_s === undefined) {
+        pr(new Error('No vehicle data returned for car number ' + argv.vehicle));
         process.exit(1);
     }
     // first some checks to see if we should even continue
@@ -287,7 +287,9 @@ teslams.all({ email: creds.username, password: creds.password }, function (error
     // require http module for the web server
     // start a web server and wait for requests to trigger TESLA Events
     http.createServer(function (req, res) {
-        parseUrl(vehicle, req, res);
+        setTimeout(function(){ 
+            parseUrl(vehicle, req, res);
+        }, 5000);   
     }).listen(httpport);
 });
 
